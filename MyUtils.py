@@ -163,6 +163,7 @@ def normalize_image_array(img, output_dtype):
         im = (im>0).astype(np.bool_)
     return im
 
+
 def get_containing_box_corners(mask, target_shape):
     row, col = np.where(mask > 0)
     top = np.min(row)
