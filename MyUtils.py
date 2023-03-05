@@ -65,25 +65,24 @@ class DataGenerator(keras.utils.Sequence):
         assert _mask.shape == _image.shape, "image shape {} and mask shape {} are not similar for id {}".format(_image.shape, _mask.shape, idstr)
         
         # cropping
+        top, bot, left, right = get_containing_box_corners(_mask, self.image_resize_to)
         image_shape = _image.shape
-        cropwidth = np.ceil(image_shape[1] * 0.4)
-        cropheight = np.ceil(self.image_resize_to[0] * cropwidth / self.image_resize_to[1])
-        cropwidth = int(cropwidth)
-        cropheight = int(cropheight)
         
-        padheight = cropheight - image_shape[0]
+        padheight = bot - image_shape[0]
+        padwidth = right - image_shape[1]
         if padheight>0:
-            _image = np.pad(_image, ((padheight//2+1,), (0,)), constant_values=0)
-            _mask = np.pad(_mask, ((padheight//2+1,), (0,)), constant_values=0)
-            assert _mask.shape == _image.shape, "image shape {} and mask shape {} are not similar for id {} after padding".format(_image.shape, _mask.shape, idstr)
+            _image = np.pad(_image, ((padheight,0), (0,0)), constant_values=0)
+            _mask = np.pad(_mask, ((padheight,0), (0,0)), constant_values=0)
+        if padwidth>0:
+            _image = np.pad(_image, ((0,0), (0,padwidth)), constant_values=0)
+            _mask = np.pad(_mask, ((0,0), (0,padwidth)), constant_values=0)
+        assert _mask.shape == _image.shape, "image shape {} and mask shape {} are not similar for id {} after padding".format(_image.shape, _mask.shape, idstr)
             
         image_shape = _image.shape
-        
-        assert image_shape[0]-cropheight>=0, "heigth cropping failed for image id {}".format(idstr)
-        assert image_shape[1]-cropwidth>=0, "width cropping failed for image id {}".format(idstr)
                       
-        _image = _image[image_shape[0]-cropheight:, image_shape[1]-cropwidth:]
-        _mask = _mask[image_shape[0]-cropheight:, image_shape[1]-cropwidth:]            
+        _image = _image[top:bot+1, left:right+1]
+        print(_image.shape)
+        _mask = _mask[top:bot+1, left:right+1]     
         
         # resizing        
         _image = img_resize(_image, self.image_resize_to)
@@ -158,3 +157,17 @@ def normalize_image_array(img, output_dtype):
     elif output_dtype == np.bool_:
         im = (im>0).astype(np.bool_)
     return im
+
+def get_containing_box_corners(mask, target_shape):
+    row, col = np.where(mask > 0)
+    top = np.min(row)
+    bot = np.max(row)
+    left = np.min(col)
+    right = np.max(col)
+    top -= 100
+    left -= 100
+    right += 100
+    bot = (right-left)*(target_shape[0]/target_shape[1]) + top
+    bot = np.ceil(bot)
+    return int(top), int(bot), int(left), int(right)
+    
