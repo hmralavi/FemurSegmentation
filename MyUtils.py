@@ -66,23 +66,28 @@ class DataGenerator(keras.utils.Sequence):
         
         # cropping
         top, bot, left, right = get_containing_box_corners(_mask, self.image_resize_to)
-        image_shape = _image.shape
-        
-        padheight = bot - image_shape[0]
-        padwidth = right - image_shape[1]
-        if padheight>0:
-            _image = np.pad(_image, ((padheight,0), (0,0)), constant_values=0)
-            _mask = np.pad(_mask, ((padheight,0), (0,0)), constant_values=0)
-        if padwidth>0:
-            _image = np.pad(_image, ((0,0), (0,padwidth)), constant_values=0)
-            _mask = np.pad(_mask, ((0,0), (0,padwidth)), constant_values=0)
+        imshape = _image.shape
+
+        if bot>imshape[0]:
+            _image = np.pad(_image, ((0,bot-imshape[0]), (0,0)), constant_values=0)
+            _mask  = np.pad(_mask,  ((0,bot-imshape[0]), (0,0)), constant_values=0)
+        if top<0:
+            _image = np.pad(_image, ((-top,0), (0,0)), constant_values=0)
+            _mask  = np.pad(_mask,  ((-top,0), (0,0)), constant_values=0)    
+            bot += -top
+            top = 0
+        if right>imshape[1]:
+            _image = np.pad(_image, ((0,0), (0,right-imshape[1])), constant_values=0)
+            _mask  = np.pad(_mask,  ((0,0), (0,right-imshape[1])), constant_values=0)
+        if left<0:
+            _image = np.pad(_image, ((0,0), (-left,0)), constant_values=0)
+            _mask  = np.pad(_mask,  ((0,0), (-left,0)), constant_values=0)            
+            right += -left
+            left = 0
         assert _mask.shape == _image.shape, "image shape {} and mask shape {} are not similar for id {} after padding".format(_image.shape, _mask.shape, idstr)
-            
-        image_shape = _image.shape
-                      
-        _image = _image[top:bot+1, left:right+1]
-        print(_image.shape)
-        _mask = _mask[top:bot+1, left:right+1]     
+        
+        _image = _image[top:bot, left:right]
+        _mask = _mask[top:bot, left:right]
         
         # resizing        
         _image = img_resize(_image, self.image_resize_to)
