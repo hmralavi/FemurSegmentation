@@ -29,13 +29,18 @@ def split_train_test_id(id_all_data, testing_share):
 
 
 class DataGenerator(keras.utils.Sequence):
-    def __init__(self, path_images, path_masks, ids, batch_size=32, image_resize_to=(480, 640), shuffle=True):
+    def __init__(self, path_images, path_masks, ids, batch_size=32, image_resize_to=(512, 512), crop_enabled=False, shuffle=True, load_all=False):
         self.path_images = path_images
         self.path_masks = path_masks
         self.image_ids = ids.copy()
         self.batch_size = batch_size
         self.image_resize_to = image_resize_to
+        self.crop_enabled = crop_enabled
         self.shuffle = shuffle
+        self.load_all = load_all
+        self.all_data_loaded = {}
+        if load_all:
+            self._load_all_data()
         self.random_generator = np.random.RandomState(seed=1000)
         self.on_epoch_end()
 
@@ -45,17 +50,19 @@ class DataGenerator(keras.utils.Sequence):
 
     def __len__(self):
         return int(np.floor(len(self.image_ids)/self.batch_size))
+    
+    def _load_all_data(self):
+        for _id in self.image_ids:
+            self.all_data_loaded[_id] = self._load_data(_id)
 
     def _load_data(self, image_id):
         idstr = str(image_id).zfill(3)
         image_path = Path(self.path_images) / Path(idstr+".tif")
         mask_path = Path(self.path_masks) / Path(idstr+".nrrd")
                 
-        # _image = np.array(PILImage.open(image_path.__str__()))
         _image = cv2.imread(image_path.__str__())
         if _image.ndim > 2:
             _image = _image[:, :, 0]
-        # _image = img_io.imread(image_path)
         assert _image.ndim == 2, "image id {} must have 2 dims but it has {} dims.".format(idstr, _image.ndim)
         
         _mask, _ = nrrd.read(mask_path.__str__())
@@ -65,37 +72,48 @@ class DataGenerator(keras.utils.Sequence):
         assert _mask.shape == _image.shape, "image shape {} and mask shape {} are not similar for id {}".format(_image.shape, _mask.shape, idstr)
         
         # cropping
-        top, bot, left, right = get_containing_box_corners(_mask, self.image_resize_to)
-        imshape = _image.shape
+        if self.crop_enabled:
+            top, bot, left, right = get_containing_box_corners(_mask, self.image_resize_to)
+            imshape = _image.shape
 
-        if bot>imshape[0]:
-            _image = np.pad(_image, ((0,bot-imshape[0]), (0,0)), constant_values=0)
-            _mask  = np.pad(_mask,  ((0,bot-imshape[0]), (0,0)), constant_values=0)
-        if top<0:
-            _image = np.pad(_image, ((-top,0), (0,0)), constant_values=0)
-            _mask  = np.pad(_mask,  ((-top,0), (0,0)), constant_values=0)    
-            bot += -top
-            top = 0
-        if right>imshape[1]:
-            _image = np.pad(_image, ((0,0), (0,right-imshape[1])), constant_values=0)
-            _mask  = np.pad(_mask,  ((0,0), (0,right-imshape[1])), constant_values=0)
-        if left<0:
-            _image = np.pad(_image, ((0,0), (-left,0)), constant_values=0)
-            _mask  = np.pad(_mask,  ((0,0), (-left,0)), constant_values=0)            
-            right += -left
-            left = 0
-        assert _mask.shape == _image.shape, "image shape {} and mask shape {} are not similar for id {} after padding".format(_image.shape, _mask.shape, idstr)
-        
-        _image = _image[top:bot, left:right]
-        _mask = _mask[top:bot, left:right]
-        
-        # resizing        
+            if bot>imshape[0]:
+                _image = np.pad(_image, ((0,bot-imshape[0]), (0,0)), constant_values=0)
+                _mask  = np.pad(_mask,  ((0,bot-imshape[0]), (0,0)), constant_values=0)
+            if top<0:
+                _image = np.pad(_image, ((-top,0), (0,0)), constant_values=0)
+                _mask  = np.pad(_mask,  ((-top,0), (0,0)), constant_values=0)
+                bot += -top
+                top = 0
+            if right>imshape[1]:
+                _image = np.pad(_image, ((0,0), (0,right-imshape[1])), constant_values=0)
+                _mask  = np.pad(_mask,  ((0,0), (0,right-imshape[1])), constant_values=0)
+            if left<0:
+                _image = np.pad(_image, ((0,0), (-left,0)), constant_values=0)
+                _mask  = np.pad(_mask,  ((0,0), (-left,0)), constant_values=0)
+                right += -left
+                left = 0
+            assert _mask.shape == _image.shape, "image shape {} and mask shape {} are not similar for id {} after padding".format(_image.shape, _mask.shape, idstr)
+
+            _image = _image[top:bot, left:right]
+            _mask = _mask[top:bot, left:right]
+        else:
+            rows, cols = _image.shape
+            if rows > cols:
+                pad_pixels = (rows - cols) // 2
+                _image = np.pad(_image, ((0, 0), (pad_pixels, pad_pixels)), constant_values=0)
+                _mask = np.pad(_mask, ((0, 0), (pad_pixels, pad_pixels)), constant_values=0)
+            elif rows < cols:
+                pad_pixels = (cols - rows) // 2
+                _image = np.pad(_image, ((pad_pixels, pad_pixels), (0, 0)), constant_values=0)
+                _mask = np.pad(_mask, ((pad_pixels, pad_pixels), (0, 0)), constant_values=0)
+
+        # resizing
         _image = img_resize(_image, self.image_resize_to)
         _mask = img_resize(_mask, self.image_resize_to)
         
         # modifying data type      
         _image = normalize_image_array(_image, np.float32)
-        _mask = normalize_image_array(_mask, np.bool_)                        
+        _mask = normalize_image_array(_mask, np.float32)                        
         
         # expand dims
         _image = np.expand_dims(_image, axis=-1)              
@@ -115,7 +133,10 @@ class DataGenerator(keras.utils.Sequence):
         images = []
         masks = []
         for _id in _image_ids:
-            _image, _mask = self._load_data(_id)
+            if self.load_all:
+                _image, _mask = self.all_data_loaded[_id]
+            else:
+                _image, _mask = self._load_data(_id)
             images.append(_image)
             masks.append(_mask)
         images = np.array(images)
@@ -123,27 +144,10 @@ class DataGenerator(keras.utils.Sequence):
         return images, masks
 
 
-def dice_coef_(y_true, y_pred, smooth=1):
-    """
-    Dice = (2*|X & Y|)/ (|X|+ |Y|)
-         =  2*sum(|A*B|)/(sum(A^2)+sum(B^2))
-    ref: https://arxiv.org/pdf/1606.04797v1.pdf
-    """
-    y_pred = K.greater_equal(y_pred,0.5)
-    y_pred = K.cast(y_pred, dtype=K.floatx())
-    y_true = K.cast(y_true, dtype=K.floatx())
-    intersection = K.sum(K.abs(y_true * y_pred), axis=-1)
-    return (2. * intersection + smooth) / (K.sum(K.square(y_true),-1) + K.sum(K.square(y_pred),-1) + smooth)
-
-
-def dice_coef(y_true, y_pred, smooth=100):
-    y_pred = K.greater_equal(y_pred, 0.5)
-    y_pred = K.cast(y_pred, dtype=K.floatx())
-    y_true = K.cast(y_true, dtype=K.floatx())
-    y_true_f = K.flatten(y_true)
-    y_pred_f = K.flatten(y_pred)
-    intersection = K.sum(y_true_f * y_pred_f)
-    dice = (2. * intersection + smooth) / (K.sum(y_true_f) + K.sum(y_pred_f) + smooth)
+def dice_coef(y_true, y_pred, smooth=1):
+    intersection = K.sum(y_true * y_pred, axis=[1,2,3])
+    union = K.sum(y_true, axis=[1,2,3]) + K.sum(y_pred, axis=[1,2,3])
+    dice = K.mean((2. * intersection + smooth)/(union + smooth), axis=0)
     return dice
 
 
