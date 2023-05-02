@@ -145,10 +145,23 @@ class DataGenerator(keras.utils.Sequence):
 
 
 def dice_coef(y_true, y_pred, smooth=1):
+    """
+    https://towardsdatascience.com/metrics-to-evaluate-your-semantic-segmentation-model-6bcb99639aa2
+    """
     intersection = K.sum(y_true * y_pred, axis=[1,2,3])
     union = K.sum(y_true, axis=[1,2,3]) + K.sum(y_pred, axis=[1,2,3])
     dice = K.mean((2. * intersection + smooth)/(union + smooth), axis=0)
     return dice
+
+def iou_coef(y_true, y_pred, smooth=1):
+    """
+    https://towardsdatascience.com/metrics-to-evaluate-your-semantic-segmentation-model-6bcb99639aa2
+    Intersection-Over-Union (IoU, Jaccard Index)
+    """
+    intersection = K.sum(K.abs(y_true * y_pred), axis=[1,2,3])
+    union = K.sum(y_true,[1,2,3])+K.sum(y_pred,[1,2,3])-intersection
+    iou = K.mean((intersection + smooth) / (union + smooth), axis=0)
+    return iou
 
 
 def dice_coef_loss(y_true, y_pred):
