@@ -196,6 +196,11 @@ def binary_cross_entropy_and_dice_coef_loss(y_true, y_pred):
     return dice_coef_loss(y_true, y_pred) + keras.losses.BinaryCrossentropy()(y_true, y_pred)
 
 
+def get_keras_custom_objects():
+    myobjects = {"dice_coef_loss": dice_coef_loss, "dice_coef": dice_coef, "binary_cross_entropy_and_dice_coef_loss": binary_cross_entropy_and_dice_coef_loss}
+    return myobjects
+
+
 def normalize_image_array(img, output_dtype):
     im = img.copy()
     im = im.astype(np.float32)
