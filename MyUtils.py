@@ -3,9 +3,9 @@
 """
 import numpy as np
 from tensorflow import keras
-# from PIL import Image as PILImage
 import cv2
 from skimage.transform import resize as img_resize
+from skimage import measure, morphology
 import nrrd
 from pathlib import Path
 from keras import backend as K
@@ -44,7 +44,6 @@ class DataGenerator(keras.utils.Sequence):
         self.random_generator = np.random.RandomState(seed=1000)
         if load_all:
             self._load_all_data()
-        self.on_epoch_end()
 
     def on_epoch_end(self):
         if self.shuffle:
@@ -59,19 +58,21 @@ class DataGenerator(keras.utils.Sequence):
 
     def _load_data(self, image_id):
         idstr = str(image_id).zfill(3)
+        
+#         image_path = Path(self.path_dataset) / Path(idstr+".jpg")
+#         mask_path = Path(self.path_dataset) / Path("manual segmentations") / Path(idstr+".nrrd")
+#         image = cv2.imread(image_path.__str__())
+#         if image.ndim > 2:
+#              image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+#         assert image.ndim == 2, "image id {} must have 2 dims but it has {} dims.".format(idstr, _image.ndim)
+        
+#         mask, _ = nrrd.read(mask_path.__str__())
+#         assert mask.ndim == 3, "mask id {} must have 3 dims but it has {} dims.".format(idstr, mask.ndim)
+#         mask = np.transpose(mask, (1, 0, 2)).squeeze(-1)
+        
+#         assert mask.shape == image.shape, "image shape {} and mask shape {} are not similar for id {}".format(image.shape, mask.shape, idstr)
+        
         data_path = Path(self.path_dataset) / Path(idstr+".femdata")
-                
-#         _image = cv2.imread(image_path.__str__())
-#         if _image.ndim > 2:
-#             _image = _image[:, :, 0]
-#         assert _image.ndim == 2, "image id {} must have 2 dims but it has {} dims.".format(idstr, _image.ndim)
-        
-#         _mask, _ = nrrd.read(mask_path.__str__())
-#         assert _mask.ndim == 3, "mask id {} must have 3 dims but it has {} dims.".format(idstr, _mask.ndim)
-#         _mask = np.transpose(_mask, (1, 0, 2)).squeeze(-1)
-        
-#         assert _mask.shape == _image.shape, "image shape {} and mask shape {} are not similar for id {}".format(_image.shape, _mask.shape, idstr)
-        
         with open(data_path, 'rb') as f:
             data = pickle.load(f)
             image = data['img']
@@ -79,13 +80,16 @@ class DataGenerator(keras.utils.Sequence):
         
         images = []
         masks = []
-        for _ in range(self.naugment):
+        for iaugment in range(self.naugment):
             _image = image.copy()
             _mask = mask.copy()
             # cropping
             if self.crop_enabled:
                 # _mask_locator = locate_femur(_image)
-                top, bot, left, right = get_containing_box_corners(_mask, self.image_resize_to, self.random_generator)
+                if iaugment == 0:
+                    top, bot, left, right = get_containing_box_corners(_mask, self.image_resize_to, None)
+                else:
+                    top, bot, left, right = get_containing_box_corners(_mask, self.image_resize_to, self.random_generator)
                 imshape = _image.shape
 
                 if bot>imshape[0]:
@@ -110,12 +114,14 @@ class DataGenerator(keras.utils.Sequence):
                 _mask = _mask[top:bot, left:right]
             else:
                 rows, cols = _image.shape
-                if rows > cols:
-                    pad_pixels = (rows - cols) // 2
+                target_ratio = self.image_resize_to[0]/self.image_resize_to[1]
+                size_factor = (rows / cols) / target_ratio
+                if size_factor > 1:
+                    pad_pixels = int(((rows / target_ratio) - cols) // 2)
                     _image = np.pad(_image, ((0, 0), (pad_pixels, pad_pixels)), constant_values=0)
                     _mask = np.pad(_mask, ((0, 0), (pad_pixels, pad_pixels)), constant_values=0)
-                elif rows < cols:
-                    pad_pixels = (cols - rows) // 2
+                elif size_factor < 1:
+                    pad_pixels = int(((cols * target_ratio) - rows) // 2)
                     _image = np.pad(_image, ((pad_pixels, pad_pixels), (0, 0)), constant_values=0)
                     _mask = np.pad(_mask, ((pad_pixels, pad_pixels), (0, 0)), constant_values=0)
 
@@ -170,6 +176,7 @@ def dice_coef(y_true, y_pred, smooth=1):
     dice = K.mean((2. * intersection + smooth)/(union + smooth), axis=0)
     return dice
 
+
 def iou_coef(y_true, y_pred, smooth=1):
     """
     https://towardsdatascience.com/metrics-to-evaluate-your-semantic-segmentation-model-6bcb99639aa2
@@ -183,6 +190,10 @@ def iou_coef(y_true, y_pred, smooth=1):
 
 def dice_coef_loss(y_true, y_pred):
     return 1-dice_coef(y_true, y_pred)
+
+
+def binary_cross_entropy_and_dice_coef_loss(y_true, y_pred):
+    return dice_coef_loss(y_true, y_pred) + keras.losses.BinaryCrossentropy()(y_true, y_pred)
 
 
 def normalize_image_array(img, output_dtype):
@@ -200,18 +211,52 @@ def normalize_image_array(img, output_dtype):
     return im
 
 
-def get_containing_box_corners(mask, target_shape, rndgen):
+def get_containing_box_corners(mask, target_shape, rndgen=None):
     row, col = np.where(mask > 0)
     top = np.min(row)
     bot = np.max(row)
     left = np.min(col)
     right = np.max(col)
-    top -= rndgen.randint(low=0, high=11)*40
-    left -= rndgen.randint(low=0, high=11)*40
-    right += rndgen.randint(low=0, high=11)*40
-    bot = (right-left)*(target_shape[0]/target_shape[1]) + top
-    bot = np.ceil(bot)
+
+    target_ratio = target_shape[0]/target_shape[1]
+    size_factor = ((bot-top) / (right-left)) / target_ratio
+    if size_factor > 1:
+        pad_pixels = ((bot-top) / target_ratio - (right-left)) // 2
+        right += pad_pixels
+        left -= pad_pixels
+    elif size_factor < 1:
+        pad_pixels = ((right-left) * target_ratio - (bot-top)) // 2
+        bot += pad_pixels
+        top -= pad_pixels
+    if rndgen:
+        scale = rndgen.randn()/4
+        width_pad = int((right-left)*abs(scale))*2
+        height_pad = int((bot-top)*abs(scale))*2
+        right += width_pad//2
+        left -= width_pad//2
+        top -= height_pad//2
+        bot += height_pad//2
+        xtranslate = rndgen.randint(-width_pad//2, width_pad//2+1)
+        ytranslate = rndgen.randint(-height_pad//2, height_pad//2+1)
+        top += ytranslate
+        bot += ytranslate
+        left += xtranslate
+        right += xtranslate
     return int(top), int(bot), int(left), int(right)
+
+
+def keep_biggest_cluster_only(mask):
+    # assuming mask is a binary image
+    # label and calculate parameters for every cluster in mask
+    for i in range(mask.shape[0]):
+        labelled = measure.label(mask[i,...])
+        rp = measure.regionprops(labelled)
+
+        # get size of largest cluster
+        size = max([j.area for j in rp])
+
+        # remove everything smaller than largest
+        mask[i,...] = morphology.remove_small_objects(mask[i,...], min_size=size-1)
     
 
 def locate_femur(im):
