@@ -11,6 +11,7 @@ from pathlib import Path
 from keras import backend as K
 from UNet import keras_models
 import pickle
+import bz2
 
 
 def get_id_all_data(path_data):
@@ -73,10 +74,14 @@ class DataGenerator(keras.utils.Sequence):
 #         assert mask.shape == image.shape, "image shape {} and mask shape {} are not similar for id {}".format(image.shape, mask.shape, idstr)
         
         data_path = Path(self.path_dataset) / Path(idstr+".femdata")
-        with open(data_path, 'rb') as f:
-            data = pickle.load(f)
-            image = data['img']
-            mask = data['mask']
+        try:
+            with open(data_path, 'rb') as f:
+                data = pickle.load(f)
+        except:
+            with bz2.BZ2File(data_path, 'rb') as f:
+                data = pickle.load(f)
+        image = data['img']
+        mask = data['mask']
         
         images = []
         masks = []
